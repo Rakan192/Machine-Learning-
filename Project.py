@@ -22,14 +22,20 @@ from scipy.stats import loguniform
 from sklearn.model_selection import KFold
 from sklearn.ensemble import VotingClassifier
 import seaborn as sns
+from sklearn.ensemble import StackingClassifier
+from sklearn.preprocessing import PolynomialFeatures
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from sklearn.linear_model import Perceptron
+from scipy import stats
+
 
 #reading Data
 df = pd.read_csv('water_potability.csv')
 
-sns.pairplot(df)
-plt.show()
-
-# Correlation heatmap to visualize relationships between numerical variables
+#sns.pairplot(df)
+#plt.show()
+# Correlation heatmap to visualize relationships between features
+"""
 corr_matrix = df.corr()
 sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
 plt.title('Correlation Heatmap')
@@ -44,6 +50,23 @@ plt.show()
 sns.countplot(x='categorical_column', data=df)
 plt.title('Count Plot for Categorical Column')
 plt.show()
+"""
+def remove_outliers_zscore(data, threshold=3):
+    z_scores = stats.zscore(data)
+    outliers = (abs(z_scores) > threshold).any(axis=1)
+    return data[~outliers]
+
+outliers_before = (abs(stats.zscore(df)) > 3).any(axis=1)
+num_outliers_before = outliers_before.sum()
+
+df_no_outliers = remove_outliers_zscore(df)
+
+# Calculate the number of outliers after removing
+outliers_after = (abs(stats.zscore(df_no_outliers)) > 3).any(axis=1)
+num_outliers_after = outliers_after.sum()
+
+print(f"Number of outliers before removing: {num_outliers_before}")
+print(f"Number of outliers after removing: {num_outliers_after}")
 
 # Calculate the total number of null or empty values in each row
 df['null_count'] = df.isnull().sum(axis=1) + df.eq('').sum(axis=1)
@@ -58,19 +81,6 @@ df = df.drop(columns='null_count')
 
 rows_with_null = df.isnull().any(axis=1).sum()
 print("Number of rows that have null values (before filling them):",rows_with_null)
-
-def identify_outliers_iqr(data):
-    Q1 = data.quantile(0.25)
-    Q3 = data.quantile(0.75)
-    IQR = Q3 - Q1
-    lower_bound = Q1 - 1.5 * IQR
-    upper_bound = Q3 + 1.5 * IQR
-    outliers = ((data < lower_bound) | (data > upper_bound)).any(axis=1)
-    return outliers
-
-outliers = identify_outliers_iqr(df)
-# Remove outliers
-df_no_outliers = df[~outliers]
 
 #Replacing empty cells.
 a = df["ph"].mean()
@@ -132,14 +142,12 @@ y = df['Potability']  # Target variable
 scaler = StandardScaler()
 X = scaler.fit_transform(X)
 
-# Apply PCA
-#pca = PCA(n_components=0.95)  # Choose the number of components that capture at least 95% of the variance
-#X_pca = pca.fit_transform(X)
-
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 k_folds = 7
 kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
+
+
 
 # First Algorithm - Logistic Regression
 param_dist = {'C': loguniform(0.001, 100)}
@@ -297,7 +305,7 @@ dtest = xgb.DMatrix(X_test, label=y_test)
 
 # Set hyperparameters
 params = {
-    'objective': 'binary:logistic',  # Binary classification
+    'objective': 'binary:logistic',  
     'max_depth': 3,
     'learning_rate': 0.1,
     'eval_metric': 'logloss',
@@ -374,6 +382,17 @@ print(f"  Precision: {precision_random_forest:.2f}")
 print(f"  Recall: {recall_random_forest:.2f}")
 print("\n")
 
+feature_importance = best_random_forest_model.feature_importances_
+#print(len(X))
+#print(len(feature_importance))
+# Visualize feature importance
+plt.bar(range(len(feature_importance)), feature_importance)
+plt.xlabel('Features')
+plt.ylabel('Importance')
+plt.title('Feature Importance from Random Forest')
+plt.xticks(rotation=45)
+plt.show()
+
 #Ensemble Learning
 voting_classifier = VotingClassifier(
     estimators=[
@@ -400,3 +419,46 @@ recall_voting = recall_score(y_test, y_pred_voting)
 print("Ensemble Learning Results:")
 print(f"Accuracy (Voting Classifier): {accuracy_voting:.2f}")
 print(f"F1 Score (Voting Classifier): {f1_voting}")
+
+
+#stacked learning 
+# Define base models
+base_models = [
+    ('logistic', best_model),
+    ('svm', best_svm_model),
+    ('decision_tree', best_decision_tree_model),
+    ('knn', best_knn_model),
+    ('random_forest', best_random_forest_model)
+]
+#class_weight={'logistic': 1, 'svm': 2, 'random_forest': 1}
+# Define meta-model
+meta_model = SVC(random_state= 42)
+
+# Create the stacked model
+
+stacked_classifier = StackingClassifier(
+    estimators=base_models,
+    final_estimator=meta_model,
+    stack_method='auto'
+)
+
+# Train the stacked model on the entire training set
+stacked_classifier.fit(X_train, y_train)
+
+# Make predictions on the test set
+y_pred_stacked = stacked_classifier.predict(X_test)
+
+# Evaluate the stacked model
+accuracy_stacked = accuracy_score(y_test, y_pred_stacked)
+f1_stacked = f1_score(y_test, y_pred_stacked)
+precision_stacked = precision_score(y_test, y_pred_stacked)
+recall_stacked = recall_score(y_test, y_pred_stacked)
+
+print("\n")
+print("Stacked Model Results:")
+print(f"Accuracy (Stacked Model): {accuracy_stacked:.2f}")
+print(f"F1 Score (Stacked Model): {f1_stacked:.2f}")
+print(f"Precision (Stacked Model): {precision_stacked:.2f}")
+print(f"Recall (Stacked Model): {recall_stacked:.2f}")
+
+
